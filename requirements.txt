@@ -1,0 +1,11 @@
+numpy==2.3.5
+ray[rllib,tune]==2.53.0
+gymnasium==1.1.1
+torch==2.9.1
+pygame==2.6.1
+matplotlib==3.10.3
+tqdm==4.67.1
+python-dotenv==1.2.2
+requests==2.33.1
+imageio==2.37.3
+imageio-ffmpeg==0.6.0

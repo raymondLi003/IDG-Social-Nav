@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "idg-social-nav"
+version = "0.1.0"
+description = "IDG validator x VLM-Social-Nav: leader/advisor/validator social-navigation grid benchmark"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ray Li" }]
+dependencies = [
+    "numpy>=2.0",
+    "gymnasium>=1.1",
+    "ray[rllib,tune]>=2.53,<2.54",
+    "torch>=2.9",
+    "dm-tree>=0.1.8",
+    "pygame>=2.6",
+    "matplotlib>=3.10",
+    "imageio>=2.37",
+    "imageio-ffmpeg>=0.6",
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+idg-eval = "idg_social_nav.run_eval:main"
+idg-train = "idg_social_nav.run_experiments:main"
+idg-precompute-advice = "idg_social_nav.precompute_advice:main"
+idg-plot = "idg_social_nav.plot_results:main"
+
+[tool.setuptools.packages.find]
+include = ["idg_social_nav*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E741",  
+]
+
+[tool.ruff.lint.per-file-ignores]
+
+"idg_social_nav/llm_validator.py" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["idg_social_nav"]

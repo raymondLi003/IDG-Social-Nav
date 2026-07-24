@@ -1,7 +1,7 @@
 """Experiment configuration: policy registry, model configs, and the RLlib
 (new API stack) builders for training the learned validator.
 
-This script trains PPO only 
+Supports SAC (default) and PPO.
 """
 
 from collections.abc import Hashable
@@ -13,12 +13,19 @@ from ray.rllib.algorithms import AlgorithmConfig, PPOConfig
 from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import (
     DefaultPPOTorchRLModule,
 )
+from ray.rllib.algorithms.sac import SACConfig
+from ray.rllib.algorithms.sac.torch.default_sac_torch_rl_module import (
+    DefaultSACTorchRLModule,
+)
 from ray.rllib.core.rl_module import MultiRLModuleSpec, RLModuleSpec
 from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
 
-from idg_social_nav.rl_modules.catalog.catalog import PPOCatalogWithImageActionEncoder
+from idg_social_nav.rl_modules.catalog.catalog import (
+    PPOCatalogWithImageActionEncoder,
+    SACCatalogWithImageActionEncoder,
+)
 
-TRAINING_ITERATIONS = 300
+TRAINING_ITERATIONS = 500
 EVAL_REPS_STOCHASTIC = 5
 
 
@@ -38,18 +45,26 @@ class ValidatorPolicies(StrEnum):
 class SocialAgentConfig:
     proposer_policy: ProposerPolicies = ProposerPolicies.SCRIPTED
     validator_policy: ValidatorPolicies = ValidatorPolicies.LEARNED
-    algorithm_name: str = "ppo"
+    algorithm_name: str = "sac"
     scenario: str = "all"
     reward_variant: str = "binary"
     override_semantics: str = "adopt"
+    ped_hesitation: float = 0.0
+    ped_route_noise: float = 0.0
 
 
 def experiment_name(cfg: SocialAgentConfig) -> str:
-    return (
+    name = (
         f"{cfg.algorithm_name}"
         f"_{cfg.proposer_policy}_{cfg.validator_policy}"
         f"__{cfg.scenario}__{cfg.reward_variant}"
     )
+    # suffixes only when on, so pre-existing checkpoint names stay valid
+    if cfg.ped_hesitation > 0.0:
+        name += f"__hes{cfg.ped_hesitation:g}"
+    if cfg.ped_route_noise > 0.0:
+        name += f"__rn{cfg.ped_route_noise:g}"
+    return name
 
 
 DEFAULT_CONV_MODEL_CONFIG = {
@@ -95,6 +110,44 @@ def _ppo_algorithm_config(learns_validator: bool) -> AlgorithmConfig:
     )
 
 
+# build the sac algo
+def _sac_algorithm_config(learns_validator: bool) -> AlgorithmConfig:
+    return SACConfig().training(
+        replay_buffer_config={
+            "type": "MultiAgentPrioritizedEpisodeReplayBuffer",
+            "capacity": 100_000,
+            "alpha": 0.8,
+            "beta": 0.4,
+        },
+        train_batch_size_per_learner=512,
+        num_steps_sampled_before_learning_starts=300,
+        actor_lr=9.2e-4,
+        critic_lr=4.0e-4,
+        alpha_lr=3.2e-3,
+        tau=0.009,
+        gamma=0.962,
+        n_step=1,
+        initial_alpha=0.64,
+        target_entropy=0.3,
+    )
+
+
+_ALGO_CONFIG_BUILDERS = {
+    "ppo": _ppo_algorithm_config,
+    "sac": _sac_algorithm_config,
+}
+
+_VALIDATOR_MODULES = {
+    "ppo": DefaultPPOTorchRLModule,
+    "sac": DefaultSACTorchRLModule,
+}
+
+_CATALOG_CLASSES = {
+    "ppo": PPOCatalogWithImageActionEncoder,
+    "sac": SACCatalogWithImageActionEncoder,
+}
+
+
 def env_config_for(cfg: SocialAgentConfig) -> dict:
     """SocialNavEnv kwargs for a training and eval run of this agent config."""
     return {
@@ -102,6 +155,8 @@ def env_config_for(cfg: SocialAgentConfig) -> dict:
         "reward_variant": cfg.reward_variant,
         "override_semantics": cfg.override_semantics,
         "randomize_variant": True,
+        "ped_hesitation": cfg.ped_hesitation,
+        "ped_route_noise": cfg.ped_route_noise,
     }
 
 
@@ -118,7 +173,10 @@ def register_envs(cfg: SocialAgentConfig) -> None:
 
 
 def add_env_config(config: AlgorithmConfig) -> AlgorithmConfig:
-    config.environment("env")
+    # disable_env_checking: RLlib's env pre-check calls reset(seed=42) on every
+    # worker's env, which would put all workers on identical rng streams
+    # (same variant draws and pedestrian hesitation draws)
+    config.environment("env", disable_env_checking=True)
     # complete episodes are needed for the turn-based env
     config.env_runners(
         batch_mode="complete_episodes",
@@ -147,9 +205,9 @@ def get_multi_agent_rl_module_specs(
     rl_module_specs = {}
     if ProposerPolicies.LEARNED in policy_names:
         rl_module_specs[ProposerPolicies.LEARNED] = RLModuleSpec(
-            module_class=DefaultPPOTorchRLModule,
+            module_class=_VALIDATOR_MODULES[agent_config.algorithm_name],
             model_config=DEFAULT_MULTI_AGENT_MODEL_CONFIG,
-            catalog_class=PPOCatalogWithImageActionEncoder,
+            catalog_class=_CATALOG_CLASSES[agent_config.algorithm_name],
         )
 
     if ProposerPolicies.SCRIPTED in policy_names:
@@ -163,9 +221,9 @@ def get_multi_agent_rl_module_specs(
 
     if ValidatorPolicies.LEARNED in policy_names:
         rl_module_specs[ValidatorPolicies.LEARNED] = RLModuleSpec(
-            module_class=DefaultPPOTorchRLModule,
+            module_class=_VALIDATOR_MODULES[agent_config.algorithm_name],
             model_config=DEFAULT_MULTI_AGENT_MODEL_CONFIG,
-            catalog_class=PPOCatalogWithImageActionEncoder,
+            catalog_class=_CATALOG_CLASSES[agent_config.algorithm_name],
         )
 
     if ValidatorPolicies.ORACLE in policy_names:
@@ -224,11 +282,13 @@ def add_multi_agent_policies(
 
 
 def create_rllib_config(cfg: SocialAgentConfig) -> AlgorithmConfig:
-    if cfg.algorithm_name != "ppo":
+    if cfg.algorithm_name not in _ALGO_CONFIG_BUILDERS:
         raise ValueError(
-            f"Only ppo is supported (got {cfg.algorithm_name!r})")
+            f"Unknown algorithm {cfg.algorithm_name!r}; "
+            f"choose from {sorted(_ALGO_CONFIG_BUILDERS)}")
     learns_validator = cfg.validator_policy == ValidatorPolicies.LEARNED
-    config = _ppo_algorithm_config(learns_validator).framework("torch")
+    builder = _ALGO_CONFIG_BUILDERS[cfg.algorithm_name]
+    config = builder(learns_validator).framework("torch")
     config = add_env_config(config)
     config = add_multi_agent_policies(config, cfg)
     config.validate()

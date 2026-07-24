@@ -1,15 +1,17 @@
 """The four VLM-Social-Nav benchmark scenarios as grid episodes.
 
   - frontal_approach: open corridor, pedestrian walking toward the agent
-  
+
   - narrow_doorway: 1-wide gap, pedestrian approaching from the far side
 
   - intersection: perpendicular rails crossing the agent's corridor.
   - frontal_gesture: frontal approach where the pedestrian displays STOP
     (the pedestrian asserts right of way and keeps walking) or GO (the pedestrian yields and waits).
 
-Scenarios are deterministic, which makes advisor calls
-enumerable and cacheable offline and keeps the oracle well-defined.
+Scenarios are deterministic by default (ped_hesitation=0). With hesitation
+enabled, step timing is stochastic but pedestrians never leave their rails,
+so advisor calls stay enumerable and cacheable offline and the (myopic)
+oracle stays well-defined.
 """
 
 from __future__ import annotations
@@ -29,6 +31,11 @@ DEFAULT_MAX_STEPS = 40
 # The pedestrian yields to the agent when the agent is in front and within this Manhattan distance.
 # this is when the pedestrian's GO gesture is active, and the agent should proceed.
 YIELD_DISTANCE = 3
+
+# Randomized routing: extra steps beyond the shortest path a pedestrian may
+# spend on detours. Bounds the reachable envelope (and thus the advice-cache
+# size) and guarantees arrival.
+ROUTE_DETOUR_SLACK = 4
 
 
 def facing_toward(src: tuple[int, int], dst: tuple[int, int], fallback: int) -> int:
@@ -51,12 +58,23 @@ class PedestrianConfig:
 
 @dataclass
 class PedestrianState:
-    """Mutable per-episode pedestrian state."""
+    """Mutable per-episode pedestrian state.
+
+    dist_map (set by the env when route randomization is on) holds BFS
+    distances to the pedestrian's destination; the pedestrian then routes
+    dynamically instead of following its rail cell-by-cell.
+    """
     config: PedestrianConfig
     pos: tuple[int, int]
     facing: int
     delay_remaining: int
     rail_idx: int = 0
+    dist_map: np.ndarray | None = None
+    route_budget: int | None = None  # remaining moves incl. detours
+
+    @property
+    def destination(self) -> tuple[int, int]:
+        return self.config.rail[-1]
 
     @classmethod
     def from_config(cls, config: PedestrianConfig) -> PedestrianState:
@@ -94,25 +112,84 @@ class PedestrianState:
         dist = abs(agent_pos[0] - self.pos[0]) + abs(agent_pos[1] - self.pos[1])
         return dist <= YIELD_DISTANCE
 
-    def step(self, agent_pos: tuple[int, int], occupied: set[tuple[int, int]]) -> None:
-        """Advance one cell along the rail.
-        The pedestrian yields to the agent when the agent is in front and within the YIELD_DISTANCE (GO gesture). 
-        The pedestrian does not step onto occupied cells.
-        
+    def step(
+            self,
+            agent_pos: tuple[int, int],
+            occupied: set[tuple[int, int]],
+            rng: np.random.Generator | None = None,
+            hesitation_p: float = 0.0,
+            route_noise: float = 0.0,
+    ) -> None:
+        """Advance one cell toward the destination.
+
+        Rail mode (route_noise == 0): the next rail cell, exactly as scripted.
+        Route mode (route_noise > 0, dist_map/route_budget set by the env):
+        the pedestrian holds a step budget (shortest distance +
+        ROUTE_DETOUR_SLACK) and may move to any neighbor from which the
+        destination is still reachable within the remaining budget. With
+        probability route_noise it picks uniformly among all such neighbors
+        (detours); otherwise it picks uniformly among the closest ones.
+        Same start, same destination, randomized route in between — and the
+        budget bounds the reachable envelope, so advice caches can be
+        precomputed for it.
+
+        Either way the pedestrian yields to the agent when the agent is in
+        front and within YIELD_DISTANCE (GO gesture), never steps onto the
+        agent or occupied cells, and with hesitation_p > 0 pauses in place
+        with that probability when about to move.
         """
         if self.delay_remaining > 0:
             self.delay_remaining -= 1
             return
-        if self.rail_idx >= len(self.config.rail) - 1:
-            return
         if self._should_yield(agent_pos):
             return
-        nxt = self.config.rail[self.rail_idx + 1]
-        if nxt == tuple(agent_pos) or nxt in occupied:
+
+        if (route_noise > 0.0 and self.dist_map is not None
+                and self.route_budget is not None and rng is not None):
+            nxt = self._route_step(agent_pos, occupied, rng, route_noise)
+        else:
+            if self.rail_idx >= len(self.config.rail) - 1:
+                return
+            nxt = self.config.rail[self.rail_idx + 1]
+            if nxt == tuple(agent_pos) or nxt in occupied:
+                nxt = None
+        if nxt is None:
+            return
+        if hesitation_p > 0.0 and rng is not None and rng.random() < hesitation_p:
             return
         self.facing = facing_toward(self.pos, nxt, self.facing)
         self.rail_idx += 1
         self.pos = nxt
+        if self.route_budget is not None:
+            self.route_budget -= 1
+
+    def _route_step(
+            self,
+            agent_pos: tuple[int, int],
+            occupied: set[tuple[int, int]],
+            rng: np.random.Generator,
+            route_noise: float,
+    ) -> tuple[int, int] | None:
+        """Next cell under budgeted randomized routing, or None to stay."""
+        if self.pos == self.destination:
+            return None
+        feasible = []
+        for dr, dc in DIR_OFFSET.values():
+            cell = (self.pos[0] + dr, self.pos[1] + dc)
+            d = self.dist_map[cell[0], cell[1]]
+            if not np.isfinite(d) or cell == tuple(agent_pos) or cell in occupied:
+                continue
+            # after spending this move, the destination must stay reachable
+            if d <= self.route_budget - 1:
+                feasible.append((cell, d))
+        if not feasible:
+            return None
+        if rng.random() < route_noise:
+            pool = [cell for cell, _ in feasible]
+        else:
+            best = min(d for _, d in feasible)
+            pool = [cell for cell, d in feasible if d == best]
+        return pool[int(rng.integers(0, len(pool)))]
 
 
 @dataclass(frozen=True)
@@ -171,7 +248,7 @@ def _frontal_approach(variant: dict) -> ScenarioConfig:
 
 def _narrow_doorway(variant: dict) -> ScenarioConfig:
     """Wall bisecting the room with a 1-wide gap
-    the pedestrian comes through from the far side. 
+    the pedestrian comes through from the far side.
     Timing decides who passes first."""
     walls = _bordered_grid(7, 11)
     walls[:, 5] = 1
@@ -217,9 +294,9 @@ def _intersection(variant: dict) -> ScenarioConfig:
 def _frontal_gesture(variant: dict) -> ScenarioConfig:
     """Frontal approach where the pedestrian displays an explicit gesture.
 
-    STOP: the pedestrian asserts right of way and keeps walking. 
+    STOP: the pedestrian asserts right of way and keeps walking.
     Its frontal discomfort zone is extended, so the agent should clear the lane early.
-    GO: the pedestrian yields (waits while the agent is close and in front). 
+    GO: the pedestrian yields (waits while the agent is close and in front).
     Its frontal zone shrinks, so the agent should simply proceed.
     """
     base = _frontal_approach(

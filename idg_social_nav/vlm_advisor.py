@@ -252,7 +252,7 @@ class _JsonCache:
 class CachedAdvisor(Advisor):
     """Wraps any advisor with a persistent JSON cache.
 
-    read_only=True freezes the cache: a miss raises KeyError 
+    read_only=True freezes the cache: a miss raises KeyError
     instead of querying the base advisor.
     """
 
@@ -321,7 +321,8 @@ class VLMAdvisor(Advisor):
     VLM advisor: queries a vision-language model for advice.
     The advisor sees the scene as text and optionally a camera image.
     The model is expected to answer with exactly two words from the fixed vocabulary
-    {left, straight, right} x {slow, stop, constant}, which are mapped onto grid advice thru core.map_vlm_tokens_to_advice.
+    {left, straight, right} x {slow, stop, constant},
+    which are mapped onto grid advice thru core.map_vlm_tokens_to_advice.
     """
 
     def __init__(self, backend, mode: str = "symbolic",

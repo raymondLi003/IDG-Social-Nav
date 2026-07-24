@@ -2,11 +2,11 @@
 This will only be seen by the validator
 
 Replaces or extends the lava channel with a graded, asymmetric personal-space
-zone around each pedestrian, elongated along its facing direction. 
+zone around each pedestrian, elongated along its facing direction.
 Entering the field is similar to stepping in lava,
 this is graded rather than terminal.
 
-Gestures influence the field: 
+Gestures influence the field:
 STOP extends the frontal zone (the pedestrian asks for the right of way)
 GO shrinks it (the pedestrian yields).
 """

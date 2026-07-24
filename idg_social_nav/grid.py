@@ -40,7 +40,7 @@ def bfs_first_step(
     cell satisfying is_target
     (None, None) when none is reachable.
 
-    start itself is never tested against is_target. 
+    start itself is never tested against is_target.
     walls and blocked cells are impassable.
     """
     h, w = walls.shape

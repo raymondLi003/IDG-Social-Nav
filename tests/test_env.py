@@ -54,7 +54,7 @@ def _make_env(**kwargs):
 
 def _run_turns(env, seq, options=FRONTAL_7):
     """
-    Run a sequence of proposer/validator turns in the given env, 
+    Run a sequence of proposer/validator turns in the given env,
     returning the final obs, rewards, terminated, truncated, infos.
     """
     env.reset(options=options)

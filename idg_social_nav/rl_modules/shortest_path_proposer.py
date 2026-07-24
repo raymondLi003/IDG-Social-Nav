@@ -1,9 +1,10 @@
 """BFS shortest-path leader: the scripted goal planner.
 
-The proposer sees the same privileged view as the learned proposer, 
-and it uses BFS to find a shortest path to the goal under the layout that is most consistent with the current view.
-The proposer avoids cells with pedestrians in view, but it does not know their future positions, 
-so it may propose a path that collides with a pedestrian. 
+The proposer sees the same privileged view as the learned proposer,
+and it uses BFS to find a shortest path to the goal under the layout
+that is most consistent with the current view.
+The proposer avoids cells with pedestrians in view, but it does not know their future positions,
+so it may propose a path that collides with a pedestrian.
 The proposer does not use any internal state of the environment or any LLM.
 """
 
@@ -43,7 +44,7 @@ _LAYOUTS = _build_layout_registry()
 class ShortestPathProposerRLM(RLModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # These are the layout index and position of the last step, 
+        # These are the layout index and position of the last step,
         # used to maintain continuity across steps
         self._layout_idx: int | None = None
         self._last_pos: tuple[int, int] | None = None
@@ -65,9 +66,10 @@ class ShortestPathProposerRLM(RLModule):
             wall_view: np.ndarray, pose: np.ndarray,
     ) -> list[tuple[int, tuple[int, int], int]]:
         """
-        Returns a list of candidate layouts that are consistent with the current egocentric wall view and pose.
+        Returns a list of candidate layouts that are consistent with the
+        current egocentric wall view and pose.
         Each candidate is a tuple of (layout index, position, direction).
-        The position is the (row, col) of the agent in the layout, 
+        The position is the (row, col) of the agent in the layout,
         and the direction is the agent's facing direction (0: up, 1: right, 2: down, 3: left).
         """
         direction = int(np.argmax(pose[2:6]))
@@ -98,7 +100,8 @@ class ShortestPathProposerRLM(RLModule):
             shape: tuple[int, int],
     ) -> set[tuple[int, int]]:
         """
-        Returns the set of cells that contain pedestrians and are visible from the agent's current position and direction.
+        Returns the set of cells that contain pedestrians and are visible
+        from the agent's current position and direction.
         The visibility is determined by the egocentric view of the environment,
         and the cells are transformed back to the global coordinates of the layout."""
         cells = set()
@@ -142,7 +145,8 @@ class ShortestPathProposerRLM(RLModule):
                     chosen = cand
                     break
         if chosen is None:
-            # choose the candidate with the largest number of walls in view, as a heuristic for the most consistent layout
+            # choose the candidate with the largest number of walls in
+            # view, as a heuristic for the most consistent layout
             chosen = max(candidates, key=lambda cand: int(_LAYOUTS[cand[0]][0].sum()))
         layout_idx, pos, direction = chosen
         self._layout_idx = layout_idx

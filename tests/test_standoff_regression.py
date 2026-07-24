@@ -1,4 +1,4 @@
-"""Regression tests for the doorway-standoff deadlock 
+"""Regression tests for the doorway-standoff deadlock
 """
 
 import numpy as np

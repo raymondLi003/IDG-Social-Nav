@@ -1,9 +1,9 @@
 """Headline validator comparison across the social-nav scenarios.
 
 run for every scenario and every validator, then summarize the results in a CSV
-four scenarios: narrow_doorway, frontal_gesture, lateral_gesture, and crosswalk
-validators: always_obey, fixed_blend, oracle, ppo, llm, llm_explain
-fixed blend: p=0.0, 0.1, ..., 1.0 
+four scenarios: frontal_approach, narrow_doorway, intersection, frontal_gesture
+validators: always_obey, fixed_blend, oracle, sac, ppo, llm
+fixed blend: p=0.0, 0.1, ..., 1.0
 
 Usage:
     python -m idg_social_nav.run_eval                     # baselines, all scenarios
@@ -38,10 +38,10 @@ from idg_social_nav.eval_common import (
 )
 from idg_social_nav.scenarios import SCENARIO_NAMES
 
-VALIDATOR_CHOICES = ("always_obey", "fixed_blend", "oracle", "ppo", "llm", "llm_explain")
+VALIDATOR_CHOICES = ("always_obey", "fixed_blend", "oracle", "sac", "ppo", "llm")
 DEFAULT_VALIDATORS = "always_obey,fixed_blend,oracle"
 DEFAULT_BLEND_PS = ",".join(f"{p / 10:.1f}" for p in range(0, 11))
-DEFAULT_LLM_MODELS = "haiku3=us.anthropic.claude-3-haiku-20240307-v1:0"
+DEFAULT_LLM_MODELS = "gpt4o=gpt-4o"
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -59,9 +59,10 @@ def resolve_scenarios(value: str) -> list[str]:
 
 
 def _resolve_cache_path(path_spec: str, scenario_name: str) -> Path:
-    """Resolve a cached:<path> spec for one scenario. 
+    """Resolve a cached:<path> spec for one scenario.
     Supports a file name, a `{scenario}` placeholder, or a directory holding one
-    `<scenario>_*.json` cache per scenario. The directory form is convenient for precomputing all scenarios in one go"""
+    `<scenario>_*.json` cache per scenario. The directory form is
+    convenient for precomputing all scenarios in one go"""
     if "{scenario}" in path_spec:
         return Path(path_spec.format(scenario=scenario_name))
     path = Path(path_spec)
@@ -76,8 +77,9 @@ def _resolve_cache_path(path_spec: str, scenario_name: str) -> Path:
 
 
 def make_advisor_provider(spec: str, seed: int):
-    """Returns (provider, stochastic). 
-    The provider(scenario_name) builds a new advisor per pairing so no rng or cache state leaks across conditions."""
+    """Returns (provider, stochastic).
+    The provider(scenario_name) builds a new advisor per pairing
+    so no rng or cache state leaks across conditions."""
     if spec == "scripted":
         return (lambda scenario_name: None), False
     if spec.startswith("cached:"):
@@ -148,21 +150,22 @@ def build_conditions(args) -> list[tuple[str, ModuleFactory, int]]:
                     fixed_blend_factory(p, seed=args.seed),
                     reps,
                 ))
-        elif validator == "ppo":
+        elif validator in ("sac", "ppo"):
             exp_name = args.checkpoint or experiment_name(SocialAgentConfig(
                 proposer_policy=ProposerPolicies.SCRIPTED,
                 validator_policy=ValidatorPolicies.LEARNED,
-                algorithm_name="ppo",
+                algorithm_name=validator,
                 scenario="all",
                 reward_variant=args.reward_variant,
+                ped_hesitation=args.ped_hesitation,
+                ped_route_noise=args.ped_route_noise,
             ))
-            conditions.append(("ppo", load_learned_validator(exp_name), 1))
-        elif validator in ("llm", "llm_explain"):
-            from idg_social_nav.llm_validator import LLMValidatorSocial, LLMValidatorSocialExplain
-            base = LLMValidatorSocialExplain if validator == "llm_explain" else LLMValidatorSocial
+            conditions.append((validator, load_learned_validator(exp_name), 1))
+        elif validator == "llm":
+            from idg_social_nav.llm_validator import LLMValidatorSocial
             for display, model in parse_llm_models(args.llm_models):
-                validator_class = _make_llm_validator_class(base, model)
-                conditions.append((f"{validator}_{display}", _llm_factory(validator_class), 1))
+                validator_class = _make_llm_validator_class(LLMValidatorSocial, model)
+                conditions.append((f"llm_{display}", _llm_factory(validator_class), 1))
         else:
             raise ValueError(
                 f"Unknown validator: {validator!r}. Known: {VALIDATOR_CHOICES}")
@@ -187,9 +190,17 @@ def main():
                              "| noisy:<eps>")
     parser.add_argument("--reward-variant", choices=["binary", "graded"], default="binary")
     parser.add_argument("--override-semantics", choices=["adopt", "nullify"], default="adopt")
+    parser.add_argument("--ped-hesitation", type=float, default=0.0,
+                        help="probability a pedestrian pauses instead of stepping; "
+                             "> 0 makes every condition stochastic, so --reps applies")
+    parser.add_argument("--ped-route-noise", type=float, default=0.0,
+                        help="probability a moving pedestrian considers sideways "
+                             "cells too (randomized routes, same destination); "
+                             "> 0 makes every condition stochastic, so --reps applies")
     parser.add_argument("--checkpoint", type=str, default=None,
-                        help="tune experiment name for the ppo validator checkpoint "
-                             "(default: the canonical all-scenario experiment)")
+                        help="tune experiment name for the learned validator checkpoint "
+                             "(default: the canonical all-scenario experiment; use this "
+                             "to eval a hesitation-0 checkpoint under --ped-hesitation)")
     parser.add_argument("--video", action="store_true",
                         help="record the first episode of each pairing to videos/")
     parser.add_argument("--seed", type=int, default=0)
@@ -198,14 +209,16 @@ def main():
     scenario_names = resolve_scenarios(args.scenarios)
     conditions = build_conditions(args)
     advisor_provider, advisor_stochastic = make_advisor_provider(args.advisor, args.seed)
+    env_stochastic = (advisor_stochastic or args.ped_hesitation > 0.0
+                      or args.ped_route_noise > 0.0)
     print(f"Scenarios: {scenario_names}")
     print(f"Conditions: {[name for name, _, _ in conditions]}")
 
     results = []
     for scenario_name in scenario_names:
         for name, validator_factory, reps in conditions:
-            # a stochastic advisor makes every condition stochastic
-            eff_reps = max(reps, args.reps) if advisor_stochastic else reps
+            # a stochastic advisor or env makes every condition stochastic
+            eff_reps = max(reps, args.reps) if env_stochastic else reps
             try:
                 results.append(run_pairing(
                     name=name,
@@ -217,6 +230,8 @@ def main():
                     seed=args.seed,
                     reward_variant=args.reward_variant,
                     override_semantics=args.override_semantics,
+                    ped_hesitation=args.ped_hesitation,
+                    ped_route_noise=args.ped_route_noise,
                     record_video=args.video,
                 ))
             except (FileNotFoundError, KeyError) as e:

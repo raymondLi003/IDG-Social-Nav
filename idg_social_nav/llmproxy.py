@@ -19,7 +19,7 @@ from urllib3.util.retry import Retry
 class ClientConfig:
     endpoint: str
     api_key: str
-    timeout: float = 118.0  
+    timeout: float = 118.0
 
     @staticmethod
     def from_env() -> ClientConfig:

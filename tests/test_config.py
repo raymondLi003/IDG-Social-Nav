@@ -26,7 +26,7 @@ from idg_social_nav.rl_modules.catalog.catalog import PPOCatalogWithImageActionE
 
 
 class TestCreateRLlibConfig:
-    def test_default_ppo_config_validates(self):
+    def test_default_sac_config_validates(self):
         config = create_rllib_config(SocialAgentConfig())
         assert isinstance(config, AlgorithmConfig)
         assert set(config.policies) == {
@@ -34,7 +34,11 @@ class TestCreateRLlibConfig:
         assert ValidatorPolicies.LEARNED in config.policies_to_train
         assert ProposerPolicies.SCRIPTED not in config.policies_to_train
 
-    def test_non_ppo_algorithm_raises(self):
+    def test_ppo_config_validates(self):
+        config = create_rllib_config(SocialAgentConfig(algorithm_name="ppo"))
+        assert isinstance(config, AlgorithmConfig)
+
+    def test_unknown_algorithm_raises(self):
         with pytest.raises(ValueError):
             create_rllib_config(SocialAgentConfig(algorithm_name="dqn"))
 
@@ -47,6 +51,8 @@ class TestEnvConfigFor:
             "reward_variant": "binary",
             "override_semantics": "adopt",
             "randomize_variant": True,
+            "ped_hesitation": 0.0,
+            "ped_route_noise": 0.0,
         }
 
     def test_kwargs_construct_an_env(self):

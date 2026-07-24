@@ -66,7 +66,7 @@ class TestGestureModulation:
 class TestLineOfSight:
     def test_wall_blocks_field(self):
         walls = _doorway()
-        # pedestrian at (2, 6) facing LEFT is behind the doorway wall 
+        # pedestrian at (2, 6) facing LEFT is behind the doorway wall
         # so (2, 4) is not in line of sight
         assert walls[2, 5] == 1
         assert not has_line_of_sight(walls, (2, 6), (2, 4))

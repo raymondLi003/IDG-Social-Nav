@@ -89,7 +89,7 @@ class ScriptedSocialAdvisor(Advisor):
             ped_cells: set[tuple[int, int]],
     ) -> Advice | None:
         """First move toward the nearest reachable cell below tau
-        WAIT when already standing on one 
+        WAIT when already standing on one
         None when no low-discomfort cell is reachable at all."""
         start = tuple(context.agent_pos)
         if field[start] < tau:

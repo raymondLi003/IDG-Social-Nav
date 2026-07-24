@@ -30,7 +30,7 @@ Every validator has the same interface. We have the observation as input, obey o
 so that we can compare the scripted, learned, and LLM validators. The
 validators compared: `always_obey`, a `fixed_blend` sweep (execute advice
 with fixed probability p in the fixed-weight baseline), `oracle` (that we 
-optimized for the reward as the upper ceiling), `ppo` (learned), and `llm`.
+optimized for the reward as the upper ceiling), `sac` (learned), and `llm`.
 
 ## Scenarios
 
@@ -44,6 +44,14 @@ optimized for the reward as the upper ceiling), `ppo` (learned), and `llm`.
 Pedestrians walk fixed, scripted paths, so every episode is deterministic
 given the scenario and the variant. That makes every possible advisor query listable
 in advance, so that VLM advice can be precomputed once into a cache and replayed for free during training and evaluation.
+With `--ped-hesitation <p>` a pedestrian about to step instead pauses with
+probability p, so that their timing becomes stochastic, but pedestrians never leave their
+rails, so the precomputed caches still cover every reachable query.
+With `--ped-route-noise <p>` the pedestrian keeps its start and destination
+but randomizes the route in between (bounded detours: at most
+ROUTE_DETOUR_SLACK extra steps). The reachable states stay enumerable.
+run `idg-precompute-advice --movement routes` once to extend a cache to
+cover them. 
 
 ## Measuring where failures come from
 
@@ -71,11 +79,11 @@ ruff check idg_social_nav tests
 # baseline comparison: always-obey, fixed-blend sweep, oracle
 idg-eval
 
-# train the PPO validator
+# train the learned validator 
 idg-train --scenario all
 
 # compare everything, including the trained and LLM validators
-idg-eval --validators always_obey,fixed_blend,oracle,ppo,llm
+idg-eval --validators always_obey,fixed_blend,oracle,sac,llm
 
 # precompute the VLM advice caches (one-time API cost)
 idg-precompute-advice --scenario all --mode pixel --backend openai
@@ -112,7 +120,7 @@ The `idg-*` commands can also run without installing, e.g.
 | `config.py` | experiment config and RLlib training setup |
 | `metrics.py` | episode metrics and oracle agreement |
 | `eval_common.py` | shared evaluation loop, tables, CSVs |
-| `run_experiments.py` | CLI: train the PPO validator |
+| `run_experiments.py` | CLI: train the learned validator (SAC/PPO) |
 | `run_eval.py` | CLI: the main validator comparison |
 | `plot_results.py` | CLI: figures from the eval CSVs |
 

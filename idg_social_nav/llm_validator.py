@@ -1,10 +1,11 @@
 """LLM validator for the social-navigation grid.
 
 The validator judges the leader's proposal against privileged evidence:
-its egocentric view 
+its egocentric view
 (with the discomfort channel rendered as ASCII bands, instead of numeric values),
-the leader's proposed action, the advisor's suggestion, and the nearest visible pedestrian gesture. 
-It answers with a single digit: 0 = obey the leader, 1 = override
+the leader's proposed action, the advisor's suggestion, and the nearest visible pedestrian gesture.
+It reasons first (<strategy> and <thought_process> tags, logged for analysis),
+then answers with a <decision> tag: 0 = obey the leader, 1 = override
 """
 
 from __future__ import annotations
@@ -40,15 +41,15 @@ from idg_social_nav.llmproxy import LLMProxy
 from idg_social_nav.paths import LOG_DIR
 
 # Default model
-MODEL_NAME = "us.anthropic.claude-3-haiku-20240307-v1:0"
+MODEL_NAME = "gpt-4o"
 
 
 # Social rulebook prompt
 RULEBOOK_PROMPT = """
-You are the safety validator on a mobile robot navigating among pedestrians. 
-A leader proposes an action and a social advisor may suggest an alternative. 
-You decide whether to allow the leader's action (0 = obey) or override it (1 = override). 
-Overriding executes the advisor's suggestion; when the advisor suggests none, overriding just blocks the leader for this turn. 
+You are the safety validator on a mobile robot navigating among pedestrians.
+A leader proposes an action and a social advisor may suggest an alternative.
+You decide whether to allow the leader's action (0 = obey) or override it (1 = override).
+Overriding executes the advisor's suggestion; when the advisor suggests none, overriding just blocks the leader for this turn.
 You are given the robot's current view of the grid, the leader's proposed action, the advisor's suggestion, and any pedestrian gesture.
 
 GRID LEGEND:
@@ -83,7 +84,11 @@ REWARD TABLE:
 
 GOAL: Maximize your reward.
 
-Reply with exactly one digit (0 or 1) and nothing else. No explanation, no whitespace, no punctuation.
+First reason, then decide. Respond in EXACTLY this format, and nothing outside these tags:
+<strategy>your overall approach in 1-2 sentences: what you are optimizing and how you generally decide</strategy>
+<thought_process>your step-by-step reasoning for THIS situation: where the pedestrians (A > V <) are and which way they walk, which cells are high discomfort (!), what the leader's proposed action would do, what the advisor suggests and what any gesture implies, and whether obeying or overriding is the rewarded choice</thought_process>
+<decision>0 or 1</decision>
+0 = obey the leader, 1 = override (execute the advisor's suggestion).
 """
 
 _PROPOSER_ACTION_NAMES = {
@@ -118,10 +123,10 @@ def _slugify(model_name: str) -> str:
 def _render_egocentric(env_obs: torch.Tensor) -> str:
     """Render the validator's egocentric observation as ASCII.
 
-    Channels: wall, agent, goal, pedestrian (facing-coded intensity), discomfort. 
+    Channels: wall, agent, goal, pedestrian (facing-coded intensity), discomfort.
     The agent always faces UP, sitting at the bottom-center cell.
-    Pedestrians render as facing glyphs (A > V <), 
-    the discomfort field renders as bands (! high, ~ mild, . comfortable). 
+    Pedestrians render as facing glyphs (A > V <),
+    the discomfort field renders as bands (! high, ~ mild, . comfortable).
     These are not numeric values.
     """
     arr = env_obs.detach().cpu().numpy() if hasattr(env_obs, "detach") else env_obs
@@ -180,26 +185,6 @@ def _parse_response(result_text: str) -> int:
     raise ValueError(f"No 0/1 digit in LLM response: {result_text!r}")
 
 
-# ask the models to articulate their own reasoning for their decisions
-_ANSWER_FORMAT_LINE = (
-    "Reply with exactly one digit (0 or 1) and nothing else. "
-    "No explanation, no whitespace, no punctuation."
-)
-
-_EXPLAIN_FORMAT = """First reason, then decide. Respond in EXACTLY this format, and nothing outside these tags:
-<strategy>your overall approach in 1-2 sentences: what you are optimizing and how you generally decide</strategy>
-<thought_process>your step-by-step reasoning for THIS situation: where the pedestrians (A > V <) are and which way they walk, which cells are high discomfort (!), what the leader's proposed action would do, what the advisor suggests and what any gesture implies, and whether obeying or overriding is the rewarded choice</thought_process>
-<decision>0 or 1</decision>
-0 = obey the leader, 1 = override (execute the advisor's suggestion)."""
-
-
-def _explain_prompt(base: str) -> str:
-    """Turn a single-digit asking prompt into one that asks for <strategy>/<thought_process>/<decision>."""
-    if _ANSWER_FORMAT_LINE in base:
-        return base.replace(_ANSWER_FORMAT_LINE, _EXPLAIN_FORMAT)
-    return base.rstrip() + "\n\n" + _EXPLAIN_FORMAT
-
-
 _TAG_RE = {name: re.compile(rf"<{name}>(.*?)</{name}>", re.S | re.I)
            for name in ("strategy", "thought_process", "decision")}
 
@@ -230,8 +215,6 @@ class LLMValidatorSocial(RLModule):
     MODEL_NAME: str = MODEL_NAME
     SYSTEM_PROMPT: str = RULEBOOK_PROMPT
     LOG_TAG: str = "rulebook"
-    # when true, append the explain tag to the llm names
-    EXPLAIN: bool = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -249,6 +232,54 @@ class LLMValidatorSocial(RLModule):
         if self._proxy is None:
             self._proxy = LLMProxy()
         return self._proxy
+
+    def _uses_openai(self) -> bool:
+        """OpenAI model names (gpt-*, o*) go to the OpenAI API directly;
+        everything else goes through the Tufts llmproxy."""
+        return self.MODEL_NAME.startswith(("gpt-", "o1", "o3", "o4"))
+
+    def _openai_generate(self, system_prompt: str, query: str) -> str:
+        import requests
+
+        from idg_social_nav.vlm_advisor import _load_api_key
+        key = _load_api_key("OPENAI_API_KEY")
+        payload = {
+            "model": self.MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+            "temperature": 0,
+            # answers carry <strategy>/<thought_process>/<decision>
+            "max_tokens": 800,
+        }
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json=payload,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    def _generate(self, system_prompt: str, query: str) -> dict:
+        """Backend dispatch; returns the llmproxy response shape
+        ({"result": text} on success, {"error": ...} on failure)."""
+        if self._uses_openai():
+            try:
+                return {"result": self._openai_generate(system_prompt, query)}
+            except Exception as exc:
+                return {"error": str(exc)}
+        return self._ensure_proxy().generate(
+            model=self.MODEL_NAME,
+            system=system_prompt,
+            query=query,
+            temperature=0.0,
+            session_id=(
+                f"llm-validator-{self.LOG_TAG}-"
+                f"{_slugify(self.MODEL_NAME)}-{self._call_count}"
+            ),
+        )
 
     @staticmethod
     def _write_jsonl(path: Path, record: dict) -> None:
@@ -274,32 +305,20 @@ class LLMValidatorSocial(RLModule):
             return self._cache[cache_key]
 
         grid_ascii = _render_egocentric(single_obs)
-        system_prompt = _explain_prompt(self.SYSTEM_PROMPT) if self.EXPLAIN else self.SYSTEM_PROMPT
+        system_prompt = self.SYSTEM_PROMPT
         query = _build_query(system_prompt, grid_ascii, proposer_action, advice, gesture)
 
-        proxy = self._ensure_proxy()
         self._call_count += 1
-        # LLM call
-        response = proxy.generate(
-            model=self.MODEL_NAME,
-            system=system_prompt,
-            query=query,
-            temperature=0.0,
-            session_id=f"llm-validator-{self.LOG_TAG}-{_slugify(self.MODEL_NAME)}-{self._call_count}",
-        )
+        # LLM call (OpenAI API or Tufts llmproxy, depending on MODEL_NAME)
+        response = self._generate(system_prompt, query)
 
         strategy, thought = "", ""
         if not isinstance(response, dict) or "error" in response:
-            print(f"[llm_validator] proxy error, defaulting to obey: {response}")
+            print(f"[llm_validator] backend error, defaulting to obey: {response}")
             decision = ValidatorAction.obey.value
-            result_text = ""
         else:
-            result_text = response.get("result", "")
             try:
-                if self.EXPLAIN:
-                    strategy, thought, decision = _parse_explain(result_text)
-                else:
-                    decision = _parse_response(result_text)
+                strategy, thought, decision = _parse_explain(response.get("result", ""))
             except ValueError as e:
                 print(f"[llm_validator] response parsing error: {e}, defaulting to obey")
                 decision = ValidatorAction.obey.value
@@ -309,28 +328,20 @@ class LLMValidatorSocial(RLModule):
         action_name = _PROPOSER_ACTION_NAMES.get(proposer_action, f"unknown_{proposer_action}")
         advice_name = _ADVICE_NAMES.get(advice, f"unknown_{advice}")
         gesture_name = _GESTURE_NAMES.get(gesture, f"unknown_{gesture}")
-        if self.EXPLAIN:
-            # put the reasoning into a different dataset
-            self._write_jsonl(self._log_path, {
-                "model": self.MODEL_NAME, "call": self._call_count,
-                "proposer_action": proposer_action, "advice": advice,
-                "gesture": gesture, "grid": grid_ascii, "decision": decision,
-            })
-            self._write_jsonl(self._explain_path, {
-                "model": self.MODEL_NAME, "call": self._call_count,
-                "proposer_action": proposer_action, "action_name": action_name,
-                "advice": advice, "advice_name": advice_name,
-                "gesture": gesture, "gesture_name": gesture_name,
-                "grid": grid_ascii,
-                "strategy": strategy, "thought_process": thought, "decision": decision,
-            })
-        else:
-            self._write_jsonl(self._log_path, {
-                "model": self.MODEL_NAME, "call": self._call_count,
-                "proposer_action": proposer_action, "advice": advice,
-                "gesture": gesture, "grid": grid_ascii,
-                "result": result_text, "decision": decision,
-            })
+        # decisions in one dataset, the reasoning in another
+        self._write_jsonl(self._log_path, {
+            "model": self.MODEL_NAME, "call": self._call_count,
+            "proposer_action": proposer_action, "advice": advice,
+            "gesture": gesture, "grid": grid_ascii, "decision": decision,
+        })
+        self._write_jsonl(self._explain_path, {
+            "model": self.MODEL_NAME, "call": self._call_count,
+            "proposer_action": proposer_action, "action_name": action_name,
+            "advice": advice, "advice_name": advice_name,
+            "gesture": gesture, "gesture_name": gesture_name,
+            "grid": grid_ascii,
+            "strategy": strategy, "thought_process": thought, "decision": decision,
+        })
         return decision
 
     @override(RLModule)
@@ -354,14 +365,3 @@ class LLMValidatorSocial(RLModule):
             ))
 
         return {SampleBatch.ACTIONS: batch_func(actions)}
-
-
-class LLMValidatorSocialExplain(LLMValidatorSocial):
-    """Same rulebook prompt, but the model first outputs <strategy>/<thought_process>/
-    <decision>.
-    The reasoning is logged to a SEPARATE dataset
-    (logs/llm_social_explain_explain__<model>.jsonl) for analysis.
-    """
-
-    LOG_TAG = "explain"
-    EXPLAIN = True

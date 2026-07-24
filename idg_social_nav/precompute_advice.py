@@ -1,4 +1,5 @@
-"""Enumerate every reachable advisor query states and precompute advice caches to save api call costs
+"""Enumerate every reachable advisor query state and precompute advice
+caches to save api call costs.
 
 For every scenario variant, every pedestrian rail position (with the
 variant's gesture), and every interior agent cell x 4 directions where the
@@ -66,20 +67,64 @@ def _ped_visible(agent_pos, agent_dir, ped_pos,
     return max(abs(dr), abs(dc)) <= view_radius
 
 
-def enumerate_query_states(name: str):
+def _route_envelope(walls, ped_cfg) -> list[tuple[tuple[int, int], int]]:
+    """All (cell, facing) states a route-randomized pedestrian can reach.
+
+    The router spends at most dist(start) + ROUTE_DETOUR_SLACK moves, so a
+    cell is reachable iff dist_from_start + dist_to_dest fits that budget
+    (the classic detour ellipse). The facing at a cell is the direction of
+    any incoming feasible edge, plus the initial facing at the start."""
+    from idg_social_nav.grid import bfs_distances, step_direction
+    from idg_social_nav.scenarios import ROUTE_DETOUR_SLACK
+
+    dist_dest = bfs_distances(walls, ped_cfg.rail[-1])
+    start = ped_cfg.rail[0]
+    dist_start = bfs_distances(walls, start)
+    budget = dist_dest[start] + ROUTE_DETOUR_SLACK
+    h, w = walls.shape
+    reachable = {
+        (r, c)
+        for r in range(h) for c in range(w)
+        if np.isfinite(dist_dest[r, c]) and np.isfinite(dist_start[r, c])
+        and dist_start[r, c] + dist_dest[r, c] <= budget
+    }
+    states = []
+    initial = PedestrianState.from_config(ped_cfg).facing
+    for cell in sorted(reachable):
+        facings = set()
+        if cell == start:
+            facings.add(initial)
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            prev = (cell[0] + dr, cell[1] + dc)
+            if (prev in reachable
+                    and dist_start[prev] + 1 + dist_dest[cell] <= budget):
+                facings.add(step_direction(prev, cell))
+        states.extend((cell, facing) for facing in sorted(facings))
+    return states
+
+
+def enumerate_query_states(name: str, movement: str = "rails"):
     """Yield (cfg, agent_pos, agent_dir, ped_specs) for every gated query
     state; ped_specs is one (rail_idx, pos, facing, gesture, visible) per
-    pedestrian, with at least one pedestrian visible."""
+    pedestrian, with at least one pedestrian visible.
+    movement="rails" enumerates the scripted rail cells; "routes" enumerates
+    the full randomized-routing envelope (superset of the rails)."""
     for variant in enumerate_variants(name):
         cfg = make_scenario(name, variant)
         rails = []
         for ped_cfg in cfg.pedestrians:
             initial = PedestrianState.from_config(ped_cfg).facing
-            rails.append([
-                (i, ped_cfg.rail[i],
-                 _rail_facing(ped_cfg.rail, i, initial), ped_cfg.gesture)
-                for i in range(len(ped_cfg.rail))
-            ])
+            if movement == "routes":
+                rails.append([
+                    (0, cell, facing, ped_cfg.gesture)
+                    for cell, facing in _route_envelope(cfg.walls, ped_cfg)
+                ])
+            else:
+                rails.append([
+                    (i, ped_cfg.rail[i],
+                     _rail_facing(ped_cfg.rail, i, initial), ped_cfg.gesture)
+                    for i in range(len(ped_cfg.rail))
+                ])
         h, w = cfg.walls.shape
         free = [
             (r, c) for r in range(h) for c in range(w)
@@ -167,7 +212,7 @@ def process_scenario(name: str, args) -> None:
     else:
         cache_path = ADVICE_CACHE_DIR / f"{name}_{args.mode}_{args.backend}.json"
 
-    states = list(enumerate_query_states(name))
+    states = list(enumerate_query_states(name, movement=args.movement))
     if args.limit is not None:
         states = states[: args.limit]
     keys = [
@@ -218,6 +263,11 @@ def parse_args(argv=None):
                         choices=("all", *SCENARIO_NAMES))
     parser.add_argument("--mode", default="symbolic",
                         choices=("symbolic", "pixel"))
+    parser.add_argument("--movement", default="rails",
+                        choices=("rails", "routes"),
+                        help="rails: scripted paths only; routes: the full "
+                             "randomized-routing envelope (for ped_route_noise; "
+                             "existing caches are extended incrementally)")
     parser.add_argument("--backend", default="scripted",
                         choices=("scripted", "openai", "anthropic", "llmproxy"))
     parser.add_argument("--model", default=None,

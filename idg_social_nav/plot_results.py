@@ -1,8 +1,9 @@
 """Figures from the run_eval CSVs.
 
-Figure 1 (per scenario): the goal step cost and social-cost Pareto view. 
+Figure 1 (per scenario): the goal step cost and social-cost Pareto view.
 The fixed-blend baseline is used to see which advise-planner blend gets the best combo
-We compare other validators (always_obey, oracle, PPO, and LLMs) to the Pareto front of the fixed-blend sweep.
+We compare other validators (always_obey, oracle, SAC/PPO, and LLMs)
+to the Pareto front of the fixed-blend sweep.
 
 Figure 2: grouped bars of good/bad disobedience rates and override
 precision/recall per validator, one panel per scenario.
@@ -33,7 +34,8 @@ _BLEND_RE = re.compile(r"^fixed_blend_p(\d+(?:\.\d+)?)$")
 _POINT_STYLES = {
     "always_obey": dict(marker="s", color="C1"),
     "oracle": dict(marker="*", color="C2", markersize=13),
-    "ppo": dict(marker="D", color="C3"),
+    "sac": dict(marker="D", color="C3"),
+    "ppo": dict(marker="d", color="C5"),
 }
 _LLM_MARKERS = ("^", "v", "P", "X", "h", "8")
 
@@ -114,7 +116,7 @@ def plot_pareto(scenario: str, rows: list[dict]) -> Path:
 
 
 def _breakdown_names(rows: list[dict]) -> list[str]:
-    """Validator names for the bar chart: 
+    """Validator names for the bar chart:
     every non-sweep validator plus the
     mid-sweep fixed-blend point as the representative.
     """

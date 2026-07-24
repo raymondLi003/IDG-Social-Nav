@@ -1,7 +1,8 @@
 """Train the learned validator (scripted proposer x learned validator).
 
 Usage:
-    python -m idg_social_nav.run_experiments     # PPO on all scenarios
+    python -m idg_social_nav.run_experiments     # SAC on all scenarios
+    python -m idg_social_nav.run_experiments --algo ppo
     python -m idg_social_nav.run_experiments --scenario narrow_doorway --reward-variant graded
 """
 
@@ -81,19 +82,30 @@ def run_experiments(cfg: SocialAgentConfig, iters: int, num_env_runners: int | N
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--algo", choices=["sac", "ppo"], default="sac")
     parser.add_argument("--scenario", choices=["all", *SCENARIO_NAMES], default="all")
     parser.add_argument("--reward-variant", choices=["binary", "graded"], default="binary")
     parser.add_argument("--iters", type=int, default=TRAINING_ITERATIONS,
                         help=f"training iterations (default: {TRAINING_ITERATIONS})")
     parser.add_argument("--num-env-runners", type=int, default=None,
                         help="override the number of env runner workers")
+    parser.add_argument("--ped-hesitation", type=float, default=0.0,
+                        help="probability a pedestrian pauses instead of stepping "
+                             "(0 = deterministic rails)")
+    parser.add_argument("--ped-route-noise", type=float, default=0.0,
+                        help="probability a moving pedestrian widens its step "
+                             "choice to sideways cells (0 = fixed rails; > 0 = "
+                             "randomized routes to the same destination)")
     args = parser.parse_args()
 
     cfg = SocialAgentConfig(
         proposer_policy=ProposerPolicies.SCRIPTED,
         validator_policy=ValidatorPolicies.LEARNED,
+        algorithm_name=args.algo,
         scenario=args.scenario,
         reward_variant=args.reward_variant,
+        ped_hesitation=args.ped_hesitation,
+        ped_route_noise=args.ped_route_noise,
     )
 
     ray.init(ignore_reinit_error=True)

@@ -5,7 +5,7 @@ Draws the full world state (walls, goal, agent, pedestrians with gestures).
 The frame is what pixel-mode VLM advisors "see". The privileged discomfort
 field is drawn only when show_field=True (demo videos) but never for advisor
 frames, just to have privileged evidence not leak into the advisor's camera.
-Output is deterministic for identical env states, 
+Output is deterministic for identical env states,
 so CachedAdvisor can precompute and cache advice for every reachable state in that scenario
 """
 
@@ -114,7 +114,7 @@ def _draw_agent(surface, pos, direction, ts, annotate) -> None:
 
 def _draw_pedestrian(surface, pos, facing, gesture, ts) -> None:
     """
-    Person glyph: head circle + shoulder ellipse, 
+    Person glyph: head circle + shoulder ellipse,
     short heading arrow,
     and a gesture mark (STOP: red raised palm, GO: green sweeping arm)."""
     r, c = pos
@@ -167,8 +167,8 @@ def render_frame(env, tile_size: int = 48, annotate: bool = True,
     """Render the env's world state to an (H*ts, W*ts, 3) uint8 RGB array.
 
     The boolean "annotate" adds row/col index labels along the border plus an "R" marker
-    and heading arrow on the agent (for the VLM). 
-    The show_field variable shades the discomfort field in red. 
+    and heading arrow on the agent (for the VLM).
+    The show_field variable shades the discomfort field in red.
     The discomfort field is drawn only in demo videos, never in advisor frames.
     """
     walls = np.asarray(env.walls)

@@ -58,7 +58,7 @@ def egocentric_view(
     """Egocentric cropped view, agent at bottom-center facing up.
 
     walls: (H, W) binary grid
-    layers: (H, W, K) float grids overlaid as channels 1..K. 
+    layers: (H, W, K) float grids overlaid as channels 1..K.
     Returns (view_radius+1, 2*view_radius+1, 1+K)
     Cells outside the grid read as walls.
     """
@@ -105,6 +105,8 @@ class SocialNavEnv(MultiAgentEnv):
             randomize_variant: bool = True,
             max_steps: int | None = None,
             step_penalty: float = 0.0,
+            ped_hesitation: float = 0.0,
+            ped_route_noise: float = 0.0,
             record_render: bool = False,
             seed=None,
     ):
@@ -129,6 +131,13 @@ class SocialNavEnv(MultiAgentEnv):
         self._fixed_variant = variant
         self._max_steps_override = max_steps
         self.step_penalty = step_penalty
+        if not 0.0 <= ped_hesitation <= 1.0:
+            raise ValueError(f"ped_hesitation must be in [0, 1], got {ped_hesitation}")
+        self.ped_hesitation = float(ped_hesitation)
+        if not 0.0 <= ped_route_noise <= 1.0:
+            raise ValueError(
+                f"ped_route_noise must be in [0, 1], got {ped_route_noise}")
+        self.ped_route_noise = float(ped_route_noise)
         self.rng = np.random.default_rng(seed)
 
         if advisor is None:
@@ -170,7 +179,7 @@ class SocialNavEnv(MultiAgentEnv):
             }),
         }
 
-        # episode state 
+        # episode state
         self.scenario: ScenarioConfig | None = None
         self.agent_pos: np.ndarray | None = None
         self.agent_dir: int | None = None
@@ -228,6 +237,13 @@ class SocialNavEnv(MultiAgentEnv):
         self.ped_states = [
             PedestrianState.from_config(cfg) for cfg in self.scenario.pedestrians
         ]
+        if self.ped_route_noise > 0.0:
+            from idg_social_nav.grid import bfs_distances
+            from idg_social_nav.scenarios import ROUTE_DETOUR_SLACK
+            for ped in self.ped_states:
+                ped.dist_map = bfs_distances(self.scenario.walls, ped.destination)
+                ped.route_budget = (
+                    int(ped.dist_map[ped.pos[0], ped.pos[1]]) + ROUTE_DETOUR_SLACK)
         self._recompute_field()
 
         self.done = False
@@ -263,7 +279,7 @@ class SocialNavEnv(MultiAgentEnv):
     # observations
     def _layer_grids(self) -> np.ndarray:
         """
-        (H, W, 4) float layers: agent, goal, pedestrian(facing-coded), discomfort 
+        (H, W, 4) float layers: agent, goal, pedestrian(facing-coded), discomfort
         Channel order matches core.CH_* minus the wall channel."""
         h, w = self.walls.shape
         layers = np.zeros((h, w, 4), dtype=np.float32)
@@ -299,7 +315,7 @@ class SocialNavEnv(MultiAgentEnv):
         """Pedestrians within detection range
 
         The gate is proximity-based and not heading based
-        the rendered frame that serves as the advisor's camera feed shows the whole scene, 
+        the rendered frame that serves as the advisor's camera feed shows the whole scene,
         so a pedestrian the agent has turned away from is still detected
         """
         visible = []
@@ -344,7 +360,7 @@ class SocialNavEnv(MultiAgentEnv):
         advice = Advice(self.advisor.advise(context))
         return advice, visible
 
-    
+
     # dynamics and actions
     def _forward_position(self) -> tuple[int, int]:
         dr, dc = DIR_OFFSET[self.agent_dir]
@@ -378,7 +394,7 @@ class SocialNavEnv(MultiAgentEnv):
             return 1.0
         return float(self.field[pos[0], pos[1]])
 
-    
+
     # turn-based action
     def step(
             self, action_dict: MultiAgentDict,
@@ -478,7 +494,7 @@ class SocialNavEnv(MultiAgentEnv):
                 validator_reward = -1.0
             else:
                 validator_reward = 0.0
-        else:  
+        else:
             # grade on discomfort avoided by the validator's override
             if overridden:
                 validator_reward = -1.0 if bad_override else d_lead - d_exec
@@ -489,7 +505,9 @@ class SocialNavEnv(MultiAgentEnv):
         ped_cells = {tuple(p.pos) for p in self.ped_states}
         for ped in self.ped_states:
             ped_cells.discard(tuple(ped.pos))
-            ped.step(tuple(self.agent_pos), ped_cells)
+            ped.step(tuple(self.agent_pos), ped_cells,
+                     rng=self.rng, hesitation_p=self.ped_hesitation,
+                     route_noise=self.ped_route_noise)
             ped_cells.add(tuple(ped.pos))
         self._recompute_field()
 

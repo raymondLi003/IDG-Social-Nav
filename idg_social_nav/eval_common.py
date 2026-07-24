@@ -1,7 +1,7 @@
 """Shared evaluation engine for the IDG social-nav runners
 
 Used by:
-  - run_eval.py    
+  - run_eval.py
   - tests/test_eval_common.py
 
 Keeps rollout / metrics / table-printing code in one place so the runner
@@ -58,7 +58,7 @@ def _env_tau(env: SocialNavEnv) -> float:
     """Hazard threshold (tau) this env uses in its reward table.
 
     Factories call this before reset(), when env.scenario is still None,
-    so we rebuild the scenario config to read its threshold. 
+    so we rebuild the scenario config to read its threshold.
     Envs that mix scenarios just use the default.
     """
     from idg_social_nav.discomfort import DiscomfortParams
@@ -134,13 +134,16 @@ def run_pairing(
     seed: int = 0,
     reward_variant: str = "binary",
     override_semantics: str = "adopt",
+    ped_hesitation: float = 0.0,
+    ped_route_noise: float = 0.0,
     record_video: bool = False,
     video_dir: Path | str = VIDEO_DIR,
 ) -> dict:
     """Run a (proposer, validator) pairing over the variants of one scenario.
 
-    Episodes are deterministic given (scenario, variant) and a fixed advisor
-    reps > 1 only matters for stochastic validators
+    Episodes are deterministic given (scenario, variant) unless the advisor,
+    the validator, or the env (ped_hesitation > 0) is stochastic;
+    only then do reps > 1 add information.
     """
     from idg_social_nav.rl_modules.oracle_validator import OracleValidatorRLM
 
@@ -153,6 +156,8 @@ def run_pairing(
         reward_variant=reward_variant,
         override_semantics=override_semantics,
         randomize_variant=False,
+        ped_hesitation=ped_hesitation,
+        ped_route_noise=ped_route_noise,
         record_render=record_video,
         seed=seed,
     )

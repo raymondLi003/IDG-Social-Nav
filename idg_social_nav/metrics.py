@@ -1,7 +1,7 @@
 """Episode metrics for the social-nav benchmark and RLlib logging callbacks.
 
 The episode metrics are computed from the per-step info dicts the env outputs
-after every validator decision (see SocialNavEnv._step_validator), 
+after every validator decision (see SocialNavEnv._step_validator),
 so the same code scores scripted, learned, and LLM validators identically.
 """
 

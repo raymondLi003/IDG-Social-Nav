@@ -16,4 +16,5 @@ logs/
 eval_results/
 curves/
 videos/
-
+advice_cache/
+SPEC.md

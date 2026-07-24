@@ -1,6 +1,5 @@
-"""Tests for llm_validator: ASCII rendering, query building, response
-parsing (plain and explain variants), and the tobytes-keyed decision cache
-(with a stubbed proxy — no network)."""
+"""Tests for llm_validator: ASCII rendering, query building, tagged
+strategy/thought_process/decision parsing,"""
 
 import json
 
@@ -25,9 +24,7 @@ from idg_social_nav.env import SocialNavEnv
 from idg_social_nav.llm_validator import (
     RULEBOOK_PROMPT,
     LLMValidatorSocial,
-    LLMValidatorSocialExplain,
     _build_query,
-    _explain_prompt,
     _parse_explain,
     _parse_response,
     _render_egocentric,
@@ -138,10 +135,11 @@ class TestParseExplain:
         assert thought == ""
         assert decision == 0
 
-    def test_explain_prompt_replaces_the_answer_line(self):
-        prompt = _explain_prompt(RULEBOOK_PROMPT)
-        assert "<decision>" in prompt
-        assert "Reply with exactly one digit (0 or 1) and nothing else." not in prompt
+    def test_rulebook_prompt_asks_for_tagged_answer(self):
+        assert "<strategy>" in RULEBOOK_PROMPT
+        assert "<thought_process>" in RULEBOOK_PROMPT
+        assert "<decision>" in RULEBOOK_PROMPT
+        assert "Reply with exactly one digit (0 or 1) and nothing else." not in RULEBOOK_PROMPT
 
 
 class _FakeProxy:
@@ -166,6 +164,9 @@ def _build_module(module_class, tmp_path):
     ).build()
     module._log_path = tmp_path / "log.jsonl"
     module._explain_path = tmp_path / "explain.jsonl"
+    # a non-OpenAI model name keeps _generate on the proxy path, so the
+    # _FakeProxy stub intercepts every call and no test ever hits the network
+    module.MODEL_NAME = "stub-proxy-model"
     return env, module
 
 
@@ -210,8 +211,8 @@ class TestLLMValidatorSocial:
         assert records[0]["proposer_action"] == int(ProposerAction.forward)
         assert "grid" in records[0]
 
-    def test_explain_variant_parses_and_logs_reasoning(self, tmp_path):
-        env, module = _build_module(LLMValidatorSocialExplain, tmp_path)
+    def test_tagged_response_parses_and_logs_reasoning(self, tmp_path):
+        env, module = _build_module(LLMValidatorSocial, tmp_path)
         module._proxy = _FakeProxy(result=(
             "<strategy>obey unless hazardous</strategy>"
             "<thought_process>the lane is clear</thought_process>"

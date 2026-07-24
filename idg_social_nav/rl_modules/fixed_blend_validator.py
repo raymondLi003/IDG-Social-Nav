@@ -1,8 +1,8 @@
 """Fixed-probability blend validator (the fixed-gamma baseline).
 
-Whenever the advisor actually suggested something (advice != NONE), 
-it overrides with a fixed probability p, otherwise it obeys. 
-Sweeping p in [0, 1] traces the naive obedience/deference trade-off curve, 
+Whenever the advisor actually suggested something (advice != NONE),
+it overrides with a fixed probability p, otherwise it obeys.
+Sweeping p in [0, 1] traces the naive obedience/deference trade-off curve,
 so that we compare the learned and oracle validators against this baseline.
 
 """

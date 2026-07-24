@@ -42,7 +42,7 @@ class Advice(IntEnum):
 class Gesture(IntEnum):
     NONE = 0
     STOP = 1  # pedestrian asks the robot to stop
-    GO = 2    # pedestrian yields 
+    GO = 2    # pedestrian yields
 
 
 # Orientation encoding
@@ -144,11 +144,11 @@ CH_PED = 3
 CH_DISCOMFORT = 4
 
 # proposer sees [wall, agent, goal, pedestrian]
-# while the social-hazard discomfort channel is validator-only 
+# while the social-hazard discomfort channel is validator-only
 N_PROPOSER_CHANNELS = 4
 N_VALIDATOR_CHANNELS = 5
 
-# pedestrian channel encodes ego-relative facing as intensity 
+# pedestrian channel encodes ego-relative facing as intensity
 # so the CNN validator and the ASCII renderer can get it
 # value = 0.25 * (ego_relative_facing + 1) with facings UP/RIGHT/DOWN/LEFT
 PED_FACING_VALUES = {UP: 0.25, RIGHT: 0.5, DOWN: 0.75, LEFT: 1.0}
@@ -183,7 +183,7 @@ class PedestrianSnapshot:
 class AdvisorContext:
     """Everything an advisor may condition on for one gated query.
 
-    frame_provider renders the RGB frame 
+    frame_provider renders the RGB frame
     so text-only advisors never pay the rendering cost.
     """
     scenario_name: str
